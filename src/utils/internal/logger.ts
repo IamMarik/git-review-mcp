@@ -50,7 +50,6 @@ const isServerless =
 export class Logger {
   private static readonly instance: Logger = new Logger();
   private pinoLogger?: PinoLogger;
-  private interactionLogger?: PinoLogger | undefined;
   private initialized = false;
   private currentMcpLevel: McpLogLevel = 'info';
   private transportType: 'stdio' | 'http' | undefined;
@@ -95,13 +94,13 @@ export class Logger {
       return pino(pinoOptions);
     }
 
-    // Node.js specific transports
-    const { default: fs } = await import('fs');
-    const { default: path } = await import('path');
-
     const transports: pino.TransportTargetOptions[] = [];
     const isDevelopment = config.environment === 'development';
     const isTest = config.environment === 'testing';
+
+    if (isTest) {
+      return pino(pinoOptions);
+    }
 
     // CRITICAL: STDIO transport MUST NOT output colored logs to stdout.
     // The MCP specification requires clean JSON-RPC on stdout with no ANSI codes.
@@ -132,60 +131,14 @@ export class Logger {
         }
         transports.push({ target: 'pino/file', options: { destination: 1 } });
       }
-    } else if (!isTest) {
+    } else {
       // CRITICAL: For STDIO transport, logs MUST go to stderr (fd 2), NOT stdout (fd 1).
       // The MCP specification requires only JSON-RPC messages on stdout.
       // For HTTP transport or production, we also use stderr to avoid polluting stdout.
       transports.push({ target: 'pino/file', options: { destination: 2 } });
     }
 
-    if (config.logsPath) {
-      try {
-        if (!fs.existsSync(config.logsPath)) {
-          fs.mkdirSync(config.logsPath, { recursive: true });
-        }
-        transports.push({
-          level: pinoLevel,
-          target: 'pino/file',
-          options: {
-            destination: path.join(config.logsPath, 'combined.log'),
-            mkdir: true,
-          },
-        });
-        transports.push({
-          level: 'error',
-          target: 'pino/file',
-          options: {
-            destination: path.join(config.logsPath, 'error.log'),
-            mkdir: true,
-          },
-        });
-      } catch (err) {
-        // Only log to console if TTY to avoid polluting stderr in STDIO mode
-        if (process.stderr?.isTTY) {
-          console.error(
-            `[Logger Init] Failed to configure file logging: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
-
     return pino({ ...pinoOptions, transport: { targets: transports } });
-  }
-
-  private async createInteractionLogger(): Promise<PinoLogger | undefined> {
-    if (isServerless || !config.logsPath) return undefined;
-
-    const { default: path } = await import('path');
-    return pino({
-      transport: {
-        target: 'pino/file',
-        options: {
-          destination: path.join(config.logsPath, 'interactions.log'),
-          mkdir: true,
-        },
-      },
-    });
   }
 
   public async initialize(
@@ -204,7 +157,6 @@ export class Logger {
     this.currentMcpLevel = level;
     this.transportType = transportType;
     this.pinoLogger = await this.createPinoLogger(level, transportType);
-    this.interactionLogger = await this.createInteractionLogger();
 
     // Start the cleanup timer only after initialization and only in Node.js
     if (!isServerless && !this.cleanupTimer) {
@@ -250,44 +202,18 @@ export class Logger {
     this.flushSuppressedMessages();
 
     // Wait for all pending writes to complete
-    await Promise.all([
-      new Promise<void>((resolve) => {
-        if (this.pinoLogger) {
-          this.pinoLogger.flush((err) => {
-            // Only log to console if TTY AND not in STDIO mode
-            // In STDIO mode, stdout is reserved for MCP JSON-RPC, so avoid polluting stderr with shutdown noise
-            if (
-              err &&
-              process.stderr?.isTTY &&
-              this.transportType !== 'stdio'
-            ) {
-              console.error('Error flushing main logger:', err);
-            }
-            resolve();
-          });
-        } else {
+    await new Promise<void>((resolve) => {
+      if (this.pinoLogger) {
+        this.pinoLogger.flush((err) => {
+          if (err && process.stderr?.isTTY && this.transportType !== 'stdio') {
+            console.error('Error flushing main logger:', err);
+          }
           resolve();
-        }
-      }),
-      new Promise<void>((resolve) => {
-        if (this.interactionLogger) {
-          this.interactionLogger.flush((err) => {
-            // Only log to console if TTY AND not in STDIO mode
-            // In STDIO mode, stdout is reserved for MCP JSON-RPC, so avoid polluting stderr with shutdown noise
-            if (
-              err &&
-              process.stderr?.isTTY &&
-              this.transportType !== 'stdio'
-            ) {
-              console.error('Error flushing interaction logger:', err);
-            }
-            resolve();
-          });
-        } else {
-          resolve();
-        }
-      }),
-    ]);
+        });
+      } else {
+        resolve();
+      }
+    });
 
     this.initialized = false;
   }
@@ -436,7 +362,7 @@ export class Logger {
     interactionName: string,
     data: Record<string, unknown>,
   ): void {
-    if (!this.interactionLogger) {
+    if (!this.pinoLogger || !this.initialized) {
       if (!isServerless)
         this.warning(
           'Interaction logger not available.',
@@ -444,7 +370,7 @@ export class Logger {
         );
       return;
     }
-    this.interactionLogger.info({ interactionName, ...data });
+    this.pinoLogger.info({ interactionName, ...data });
   }
 }
 

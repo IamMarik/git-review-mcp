@@ -1,256 +1,184 @@
-<div align="center">
-  <h1>@cyanheads/git-mcp-server</h1>
-  <p><b>A Git MCP server for AI agents. STDIO & Streamable HTTP.</b>
-  <div>28 Tools · 1 Resource · 1 Prompt</div>
-  </p>
-</div>
+# Repo Review MCP
 
-<div align="center">
+> A read-only MCP server designed specifically for AI code review workflows.
 
-[![Version](https://img.shields.io/badge/Version-2.15.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--11--25-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/git-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
+Repo Review MCP gives an MCP client bounded, local access to repository status,
+diffs, history, and selected text files. It intentionally has no tools or
+service methods for changing files, the index, commits, refs, remotes,
+worktrees, stashes, or repository configuration.
 
-</div>
+## Public tools
 
----
+The complete public tool surface is:
 
-## Tools
+| Tool                      | Purpose                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `review_status`           | Report HEAD, branch/upstream state, staged, unstaged, untracked, and conflicted paths plus a snapshot ID.   |
+| `review_diff`             | Return a bounded patch for `working`, `staged`, `unstaged`, `last_commit`, `commit`, or `range`.            |
+| `review_log`              | Return bounded structured commit summaries.                                                                 |
+| `review_changed_file`     | Read one current changed or untracked text file after path, secret, symlink, binary, byte, and line checks. |
+| `review_file_at_revision` | Read one text blob from a strictly validated local revision.                                                |
 
-28 git operations organized into seven categories:
+There are no public prompts or resources that direct write workflows.
 
-| Category                  | Tools                                                                                                                          | Description                                                                                                         |
-| :------------------------ | :----------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------ |
-| **Repository Management** | `git_init`, `git_clone`, `git_status`, `git_clean`                                                                             | Initialize repos, clone from remotes, check status, clean untracked files                                           |
-| **Staging & Commits**     | `git_add`, `git_commit`, `git_diff`                                                                                            | Stage changes, create commits, compare changes                                                                      |
-| **History & Inspection**  | `git_log`, `git_show`, `git_blame`, `git_reflog`                                                                               | View commit history, inspect objects, trace authorship, view ref logs                                               |
-| **Analysis**              | `git_changelog_analyze`                                                                                                        | Gather git context and instructions for LLM-driven changelog analysis                                               |
-| **Branching & Merging**   | `git_branch`, `git_checkout`, `git_merge`, `git_rebase`, `git_cherry_pick`                                                     | Manage branches, switch contexts, integrate changes, apply specific commits                                         |
-| **Remote Operations**     | `git_remote`, `git_fetch`, `git_pull`, `git_push`                                                                              | Configure remotes, fetch updates, synchronize repositories, publish changes                                         |
-| **Advanced Workflows**    | `git_tag`, `git_stash`, `git_reset`, `git_worktree`, `git_set_working_dir`, `git_clear_working_dir`, `git_wrapup_instructions` | Tag releases (list/create/delete/verify), stash changes, reset state, manage worktrees, set/clear session directory |
+## What read-only means
 
-## Resources
+Production Git execution is limited to an explicit allowlist:
 
-| Resource                  | URI                       | Description                                                           |
-| :------------------------ | :------------------------ | :-------------------------------------------------------------------- |
-| **Git Working Directory** | `git://working-directory` | The current session working directory, set via `git_set_working_dir`. |
+`status`, `diff`, `log`, `show`, `rev-parse`, `symbolic-ref`, `for-each-ref`,
+and `cat-file`.
 
-## Prompts
+The provider exposes typed review methods rather than a generic Git command or
+argument-array API. Git is spawned with structured argv, `shell: false`,
+`GIT_OPTIONAL_LOCKS=0`, and no network-changing command. The production source
+contains no implementation for staging, committing, fetching, pushing,
+branch/tag/ref mutation, checkout, reset, clean, stash, worktree changes,
+initialization, cloning, or Git configuration mutation.
 
-| Prompt          | Description                                                                               | Parameters                    |
-| :-------------- | :---------------------------------------------------------------------------------------- | :---------------------------- |
-| **Git Wrap-up** | Workflow protocol for completing git sessions: review, document, commit, and tag changes. | `changelogPath`, `createTag`. |
+External diff, textconv, filesystem-monitor, and untracked-cache extension
+points are disabled for review commands so repository Git configuration cannot
+introduce executable helpers or optional index writes.
 
-## Getting started
+Structured logs are emitted to process streams only. The production server has
+no filesystem-backed log destination or other file-writing API.
 
-### Runtime
+This guarantee covers actions initiated by Repo Review MCP. It cannot prevent a
+different process or user from changing a repository concurrently, and it does
+not make arbitrary source code secret-safe. Users remain responsible for not
+placing credentials in reviewable source files.
 
-Works with both Bun and Node.js. Runtime is auto-detected.
+## Repository selection
 
-| Runtime     | Command                                 | Minimum Version |
-| ----------- | --------------------------------------- | --------------- |
-| **Node.js** | `npx @cyanheads/git-mcp-server@latest`  | >= 20.0.0       |
-| **Bun**     | `bunx @cyanheads/git-mcp-server@latest` | >= 1.2.0        |
+`REVIEW_BASE_DIR` is required, must be absolute, and must exist when the server
+starts. Every tool accepts the same `repository` selector: a relative path
+beneath that base directory. The server resolves real paths, rejects traversal
+and symlink escape, and verifies that the selection belongs to a Git working
+tree. It does not store or mutate a cross-request working directory.
 
-### MCP client configuration
+For example, with:
 
-Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match your setup — especially the git identity fields.
+```text
+REVIEW_BASE_DIR=/srv/reviewable
+/srv/reviewable/team/api/.git
+/srv/reviewable/team/web/.git
+```
+
+use `team/api` or `team/web` as the `repository` value. Use `.` when the base
+directory itself is the repository.
+
+## Installation and runtime
+
+Node.js 20+ and Bun 1.2+ are supported. This fork is not published as the
+upstream npm package; build it from the checked-out repository:
+
+```sh
+bun install
+bun run build
+REVIEW_BASE_DIR=/absolute/path/to/repositories bun run start:stdio
+```
+
+The package identity is `@iammarik/repo-review-mcp` and the binary name is
+`repo-review-mcp`. No publishing is performed by this repository transformation.
+
+Example MCP client configuration for a local checkout:
 
 ```json
 {
   "mcpServers": {
-    "git-mcp-server": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["@cyanheads/git-mcp-server@latest"],
+    "repo-review-mcp": {
+      "command": "bun",
+      "args": ["/absolute/path/to/git-review-mcp/dist/index.js"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info",
-        "GIT_BASE_DIR": "~/Developer/",
-        "LOGS_DIR": "~/Developer/logs/git-mcp-server/",
-        "GIT_USERNAME": "cyanheads",
-        "GIT_EMAIL": "casey@caseyjhand.com",
-        "GIT_SIGN_COMMITS": "true"
+        "REVIEW_BASE_DIR": "/absolute/path/to/repositories",
+        "MCP_LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
 
-Bun users: replace `"command": "npx"` with `"command": "bunx"`.
+For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`; the default bind address is
+`127.0.0.1:3015` with endpoint `/mcp`.
 
-For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and `MCP_HTTP_PORT=3015`.
+## Safe revisions
 
-## Features
+Only these forms are accepted:
 
-Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
+- `HEAD`
+- `HEAD^`
+- `HEAD~N`, where `N` is from 0 through 20
+- `origin/<safe-branch-name>`
+- hexadecimal commit SHAs with at least 7 characters
 
-| Feature                      | Details                                                                                                                                                                               |
-| :--------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Declarative tools            | Define capabilities in single, self-contained files. The framework handles registration, validation, and execution.                                                                   |
-| Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                 |
-| Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                            |
-| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.                                                                            |
-| Observability                | Structured logging (Pino) and optional auto-instrumented OpenTelemetry for traces and metrics.                                                                                        |
-| Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                           |
-| Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                         |
-| Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                             |
-| Working directory management | Session-specific directory context for multi-repo workflows.                                                                                                                          |
-| Configurable git identity    | Override author/committer info via environment variables, with fallback to global git config.                                                                                         |
-| Commit signing               | GPG/SSH signing (enabled by default) for commits, merges, rebases, cherry-picks, and tags. Silent fallback to unsigned on failure with `signed`/`signingWarning` fields in responses. |
-| Safety                       | Destructive operations (`git clean`, `git reset --hard`) require explicit confirmation flags.                                                                                         |
+Leading options, tags, free-form ref expressions, search selectors, reflog
+selectors, and arbitrary Git flags are rejected.
 
-## Security
+## Snapshots and consistency
 
-- All file paths are validated and sanitized to prevent directory traversal.
-- Optional `GIT_BASE_DIR` restricts operations to a specific directory tree for multi-tenant sandboxing.
-- Git commands use validated arguments via process spawning — no shell interpolation.
-- JWT and OAuth support for authenticated deployments.
-- Optional rate limiting via the DI-managed `RateLimiter` service.
-- All operations are logged with request context for auditing.
+`review_status` and `review_diff` return a deterministic `snapshotId` derived
+from repository identity, HEAD, porcelain status, staged and unstaged diffs,
+and untracked path metadata. Tools that accept `expectedSnapshotId` fail with a
+structured `snapshot_changed` conflict if the working state drifted. Snapshot
+state is recomputed and never persisted.
+
+## Secret, binary, and path protection
+
+Current file reads must target the exact changed-file set. Historical reads use
+a validated revision and path. Both readers block `.env` variants, `.git`,
+common credential directories, private-key/certificate formats, credential
+stores, and known secret filenames. Current-file reads reject symlinks and
+real-path escape. Text containing obvious credential assignments or bearer
+tokens is redacted conservatively. Binary content is rejected.
+
+Diff output omits content for blocked secret paths and redacts obvious
+credential assignments in the remaining patch. This is defense in depth, not a
+complete secret scanner.
+
+## Limits and truncation
+
+- Status returns at most 500 paths in each category and reports the total
+  unique changed-file count.
+- Log defaults to 20 commits and has a hard maximum of 100.
+- Patch output defaults to 200,000 bytes and has a hard maximum of 500,000.
+- File output defaults to 100,000 bytes and 2,000 lines, with hard maxima of
+  500,000 bytes and 10,000 lines.
+- Responses include explicit truncation metadata; included arrays are not
+  silently shortened except for the documented status/path hard boundary.
 
 ## Configuration
 
-All configuration is validated at startup in `src/config/index.ts`. Key environment variables:
+| Variable                        | Purpose                                                    | Default     |
+| ------------------------------- | ---------------------------------------------------------- | ----------- |
+| `REVIEW_BASE_DIR`               | Required absolute base containing reviewable repositories. | none        |
+| `REVIEW_MAX_COMMAND_TIMEOUT_MS` | Local read-only Git command timeout.                       | `30000`     |
+| `REVIEW_MAX_BUFFER_SIZE_MB`     | Internal Git output buffer ceiling.                        | `10`        |
+| `MCP_TRANSPORT_TYPE`            | `stdio` or `http`.                                         | `stdio`     |
+| `MCP_HTTP_HOST`                 | HTTP bind host.                                            | `127.0.0.1` |
+| `MCP_HTTP_PORT`                 | HTTP bind port.                                            | `3015`      |
+| `MCP_AUTH_MODE`                 | `none`, `jwt`, or `oauth`.                                 | `none`      |
+| `MCP_LOG_LEVEL`                 | Structured log level.                                      | `debug`     |
 
-| Variable                       | Description                                                                                                                                       | Default     |
-| :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ | :---------- |
-| `MCP_TRANSPORT_TYPE`           | Transport: `stdio` or `http`.                                                                                                                     | `stdio`     |
-| `MCP_SESSION_MODE`             | HTTP session mode: `stateless`, `stateful`, or `auto`.                                                                                            | `auto`      |
-| `MCP_RESPONSE_FORMAT`          | Response format: `json` (LLM-optimized), `markdown` (human-readable), or `auto`.                                                                  | `json`      |
-| `MCP_RESPONSE_VERBOSITY`       | Detail level: `minimal`, `standard`, or `full`.                                                                                                   | `standard`  |
-| `MCP_HTTP_PORT`                | HTTP server port.                                                                                                                                 | `3015`      |
-| `MCP_HTTP_HOST`                | HTTP server hostname.                                                                                                                             | `127.0.0.1` |
-| `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                        | `/mcp`      |
-| `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                   | `none`      |
-| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`.                                                                    | `in-memory` |
-| `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                             | `false`     |
-| `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                              | `info`      |
-| `GIT_SIGN_COMMITS`             | GPG/SSH signing for commits, merges, rebases, cherry-picks, and tags. Falls back to unsigned on failure (see response `signed`/`signingWarning`). | `true`      |
-| `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                            | `(none)`    |
-| `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                        | `(none)`    |
-| `GIT_BASE_DIR`                 | Absolute path to restrict all git operations to a specific directory tree.                                                                        | `(none)`    |
-| `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                          | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                | `(none)`    |
-| `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                     | `(none)`    |
+The upstream transport, lifecycle, structured error, response formatting,
+logging, authentication, rate limiting, telemetry, and test
+infrastructure remain available where they do not broaden repository access.
 
-## Running the server
-
-### Via package manager (no install)
+## Development
 
 ```sh
-npx @cyanheads/git-mcp-server@latest
+REVIEW_BASE_DIR="$PWD" bun run devcheck
+REVIEW_BASE_DIR="$PWD" bun test
+REVIEW_BASE_DIR="$PWD" bun rebuild
 ```
 
-Configure through environment variables or your MCP client config.
+See [AGENTS.md](AGENTS.md) for contribution rules.
 
-### Local development
+## Attribution and license
 
-```sh
-# Build and run
-npm run rebuild
-npm run start:stdio   # or start:http
+Repo Review MCP was originally forked from
+[`cyanheads/git-mcp-server`](https://github.com/cyanheads/git-mcp-server) and
+has been substantially narrowed into a read-only repository review product.
+Upstream copyright notices and file headers are retained where applicable.
 
-# Dev mode with hot reload
-npm run dev:stdio     # or dev:http
-
-# Checks and tests
-npm run devcheck      # lint, format, typecheck
-npm test
-```
-
-### Cloudflare Workers
-
-```sh
-npm run build:worker   # Build the worker bundle
-npm run deploy:dev     # Run locally with Wrangler
-npm run deploy:prod    # Deploy to Cloudflare
-```
-
-## Project structure
-
-| Directory                   | Purpose                                                           |
-| :-------------------------- | :---------------------------------------------------------------- |
-| `src/mcp-server/tools`      | Tool definitions (`*.tool.ts`). Git capabilities live here.       |
-| `src/mcp-server/resources`  | Resource definitions (`*.resource.ts`). Git context data sources. |
-| `src/mcp-server/transports` | HTTP and STDIO transport implementations, including auth.         |
-| `src/storage`               | `StorageService` abstraction and provider implementations.        |
-| `src/services`              | Git service provider (CLI-based git operations).                  |
-| `src/container`             | DI container registrations and tokens.                            |
-| `src/utils`                 | Logging, error handling, performance, security utilities.         |
-| `src/config`                | Environment variable parsing and validation (Zod).                |
-| `tests/`                    | Unit and integration tests, mirroring `src/` structure.           |
-
-## Response format
-
-Configure output format and verbosity via `MCP_RESPONSE_FORMAT` and `MCP_RESPONSE_VERBOSITY`.
-
-JSON format (default, optimized for LLM consumption):
-
-```json
-{
-  "success": true,
-  "branch": "main",
-  "staged": ["src/index.ts", "README.md"],
-  "unstaged": ["package.json"],
-  "untracked": []
-}
-```
-
-Markdown format (human-readable):
-
-```
-# Git Status: main
-
-## Staged (2)
-- src/index.ts
-- README.md
-
-## Unstaged (1)
-- package.json
-```
-
-The LLM always receives the complete structured data via `responseFormatter` — full file lists, metadata, timestamps — regardless of what the client displays. Verbosity controls how much detail is included: `minimal` (core fields only), `standard` (balanced), or `full` (everything).
-
-## Development guide
-
-See [`AGENTS.md`](AGENTS.md) for architecture, tool development patterns, and contribution rules.
-
-## Testing
-
-Tests use [Bun's test runner](https://bun.sh/docs/cli/test) with Vitest compatibility.
-
-```sh
-bun test              # Run all tests
-bun test --coverage   # With coverage
-bun run devcheck      # Lint, format, typecheck, audit
-```
-
-## Roadmap
-
-The server uses a provider-based architecture for git operations:
-
-- **CLI provider** (current) — Full 28-tool coverage via native git CLI. Requires local git installation.
-- **Isomorphic git provider** (planned) — Pure JS implementation for edge deployment (Cloudflare Workers, Vercel Edge, Deno Deploy). Uses [isomorphic-git](https://isomorphic-git.org/).
-- **GitHub API provider** (maybe) — Cloud-native operations via GitHub REST/GraphQL APIs, no local repo required.
-
-## Contributing
-
-Issues and pull requests are welcome. Run checks before submitting:
-
-```sh
-npm run devcheck
-npm test
-```
-
-## License
-
-Apache 2.0. See [LICENSE](./LICENSE).
-
----
-
-<div align="center">
-  <p>Built with the <a href="https://github.com/cyanheads/mcp-ts-template">mcp-ts-template</a></p>
-  <p>
-    <a href="https://github.com/sponsors/cyanheads">Sponsor this project</a> ·
-    <a href="https://www.buymeacoffee.com/cyanheads">Buy me a coffee</a>
-  </p>
-</div>
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE). The repository did
+not contain a separate `NOTICE` file at the time of this fork transformation.

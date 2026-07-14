@@ -161,12 +161,6 @@ const start = async (): Promise<void> => {
     }),
   );
 
-  // Storage Service is now initialized in the container
-  logger.info(
-    `Storage service initialized with provider: ${config.storage.providerType}`,
-    requestContextService.createRequestContext({ operation: 'StorageInit' }),
-  );
-
   transportManager = container.resolve<TransportManager>(TransportManagerToken);
 
   const startupContext = requestContextService.createRequestContext({

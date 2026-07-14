@@ -4,9 +4,11 @@
  * @module src/mcp-server/prompts/definitions
  */
 
-import { gitWrapupPrompt } from './git-wrapup.prompt.js';
-
 /**
  * An array containing all prompt definitions for easy iteration.
  */
-export const allPromptDefinitions = [gitWrapupPrompt];
+import type { PromptDefinition } from '../utils/promptDefinition.js';
+import type { ZodObject, ZodRawShape } from 'zod';
+
+export const allPromptDefinitions: PromptDefinition<ZodObject<ZodRawShape>>[] =
+  [];

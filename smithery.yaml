@@ -2,31 +2,22 @@ startCommand:
   type: stdio
   configSchema:
     type: object
+    required: ['REVIEW_BASE_DIR']
     properties:
-      MCP_TRANSPORT_TYPE:
+      REVIEW_BASE_DIR:
         type: string
-        enum: ['stdio', 'http']
-        default: 'stdio'
-        description: "MCP communication transport ('stdio' or 'http')."
-      MCP_HTTP_PORT:
-        type: integer
-        default: 3015
-        description: "HTTP server port (if MCP_TRANSPORT_TYPE is 'http')."
+        description: 'Required absolute directory containing all reviewable local repositories.'
       MCP_LOG_LEVEL:
         type: string
         default: 'info'
-        description: 'Minimum logging level.'
-      GIT_BASE_DIR:
-        type: string
-        description: 'Optional absolute path to restrict all git operations to a specific directory tree. Provides security sandboxing for multi-tenant or shared environments.'
+        description: 'Minimum structured log level.'
   commandFunction: |
     (config) => ({
       "command": "bunx",
-      "args": ["@cyanheads/git-mcp-server@latest"],
+      "args": ["@iammarik/repo-review-mcp@latest"],
       "env": {
-        "MCP_TRANSPORT_TYPE": config.MCP_TRANSPORT_TYPE,
-        "MCP_HTTP_PORT": config.MCP_HTTP_PORT,
+        "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_LOG_LEVEL": config.MCP_LOG_LEVEL,
-        "GIT_BASE_DIR": config.GIT_BASE_DIR
+        "REVIEW_BASE_DIR": config.REVIEW_BASE_DIR
       }
     })

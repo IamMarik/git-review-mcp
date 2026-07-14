@@ -40,13 +40,10 @@ describe('config parsing', () => {
     process.env.MCP_ALLOWED_ORIGINS =
       'https://a.example.com, https://b.example.com ';
     process.env.DEV_MCP_SCOPES = 'scope:read, scope:write';
-    process.env.STORAGE_PROVIDER_TYPE = 'fs';
     process.env.MCP_SESSION_MODE = ''; // exercise empty-string sanitization
     process.env.OTEL_ENABLED = 'true';
     process.env.OTEL_LOG_LEVEL = 'warning';
     process.env.OTEL_TRACES_SAMPLER_ARG = '0.5';
-    delete process.env.LOGS_DIR;
-
     const parsed = parseConfig();
 
     expect(parsed.logLevel).toBe('warn');
@@ -57,8 +54,6 @@ describe('config parsing', () => {
       'https://b.example.com',
     ]);
     expect(parsed.devMcpScopes).toEqual(['scope:read', 'scope:write']);
-    expect(parsed.storage.providerType).toBe('filesystem');
-    expect(parsed.logsPath).toBeUndefined();
     expect(parsed.openTelemetry.enabled).toBe(true);
     expect(parsed.openTelemetry.logLevel).toBe('WARN');
     expect(parsed.openTelemetry.samplingRatio).toBe(0.5);
@@ -85,5 +80,16 @@ describe('config parsing', () => {
     );
 
     consoleSpy.mockRestore();
+  });
+
+  it('requires an existing absolute REVIEW_BASE_DIR', () => {
+    delete process.env.REVIEW_BASE_DIR;
+    expect(() => parseConfig()).toThrow(/Invalid application configuration/);
+
+    process.env.REVIEW_BASE_DIR = 'relative/path';
+    expect(() => parseConfig()).toThrow(/Invalid application configuration/);
+
+    process.env.REVIEW_BASE_DIR = '/path/that/does/not/exist/repo-review';
+    expect(() => parseConfig()).toThrow(/must exist/);
   });
 });

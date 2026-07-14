@@ -1,6 +1,2 @@
-/**
- * @fileoverview CLI Git Provider barrel exports
- * @module services/git/providers/cli
- */
-
-export { CliGitProvider } from './CliGitProvider.js';
+/** @fileoverview CLI review provider exports. @module services/git/providers/cli */
+export * from './CliReviewProvider.js';

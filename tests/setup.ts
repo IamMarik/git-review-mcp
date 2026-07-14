@@ -8,6 +8,13 @@ import { beforeAll, afterAll, afterEach, vi } from 'vitest';
 if (typeof process !== 'undefined' && process.env && !process.env.NODE_ENV) {
   process.env.NODE_ENV = 'test';
 }
+if (
+  typeof process !== 'undefined' &&
+  process.env &&
+  !process.env.REVIEW_BASE_DIR
+) {
+  process.env.REVIEW_BASE_DIR = process.cwd();
+}
 
 // Bun compatibility shims — Bun's test runner lacks some Vitest APIs.
 // TODO: Remove these once Bun's test runner natively supports vi.mock and fake timers.

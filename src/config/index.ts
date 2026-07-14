@@ -8,6 +8,7 @@
  * @module src/config/index
  */
 import { homedir } from 'os';
+import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import dotenv from 'dotenv';
@@ -33,24 +34,6 @@ const emptyStringAsUndefined = (val: unknown) => {
   }
   return val;
 };
-
-/**
- * Parse a boolean from an env-var string, applying the given default when
- * unset. `z.coerce.boolean()` would treat the literal string "false" as
- * truthy — this helper handles the common string forms correctly so
- * `GIT_SIGN_COMMITS=false` actually opts out.
- */
-const parseBoolEnv =
-  (defaultValue: boolean) =>
-  (val: unknown): boolean => {
-    if (typeof val === 'boolean') return val;
-    if (typeof val === 'string') {
-      const lower = val.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on'].includes(lower)) return true;
-      if (['false', '0', 'no', 'off', ''].includes(lower)) return false;
-    }
-    return defaultValue;
-  };
 
 /**
  * Expands tilde (~) in paths to the user's home directory.
@@ -131,7 +114,6 @@ const ConfigSchema = z.object({
       z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
     )
     .default('debug'),
-  logsPath: z.preprocess(expandTildePath, z.string().optional()), // Made optional as it's Node-specific
   environment: z
     .preprocess(
       (val) => {
@@ -196,77 +178,16 @@ const ConfigSchema = z.object({
       defaultClientRedirectUris: z.array(z.string()).optional(),
     })
     .optional(),
-  supabase: z
-    .object({
-      url: z.string().url(),
-      anonKey: z.string(),
-      serviceRoleKey: z.string().optional(),
-    })
-    .optional(),
-  storage: z.object({
-    providerType: z
-      .preprocess(
-        (val) => {
-          const str = emptyStringAsUndefined(val);
-          if (typeof str === 'string') {
-            const lower = str.toLowerCase();
-            const aliasMap: Record<string, string> = {
-              mem: 'in-memory',
-              fs: 'filesystem',
-            };
-            return aliasMap[lower] ?? lower;
-          }
-          return str;
-        },
-        z.enum([
-          'in-memory',
-          'filesystem',
-          'supabase',
-          'cloudflare-r2',
-          'cloudflare-kv',
-        ]),
-      )
-      .default('in-memory'),
-    filesystemPath: z.preprocess(
-      expandTildePath,
-      z.string().default('./.storage'),
-    ), // Supports tilde expansion for filesystem storage
-  }),
-  git: z.object({
-    provider: z.preprocess(
-      emptyStringAsUndefined,
-      z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
-    ),
-    signCommits: z.preprocess(parseBoolEnv(true), z.boolean()),
-    authorName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git author name must not contain newlines or null bytes',
-      )
-      .optional(),
-    authorEmail: z.string().email().optional(),
-    committerName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git committer name must not contain newlines or null bytes',
-      )
-      .optional(),
-    committerEmail: z.string().email().optional(),
-    wrapupInstructionsPath: z.preprocess(
-      expandTildePath,
-      z.string().optional(),
-    ), // Supports tilde expansion for custom wrapup instructions
+  review: z.object({
     baseDir: z.preprocess(
       (val) => expandTildePath(emptyStringAsUndefined(val)),
       z
         .string()
-        .refine((p) => !p || isAbsolutePath(p), {
+        .min(1)
+        .refine((p) => isAbsolutePath(p), {
           message:
-            'GIT_BASE_DIR must be an absolute path (tilde expansion is supported)',
-        })
-        .optional(),
+            'REVIEW_BASE_DIR must be an absolute path (tilde expansion is supported)',
+        }),
     ),
     maxCommandTimeoutMs: z.coerce.number().default(30000),
     maxBufferSizeMb: z.coerce.number().default(10),
@@ -310,7 +231,6 @@ const parseConfig = () => {
       description: env.PACKAGE_DESCRIPTION ?? packageManifest.description,
     },
     logLevel: env.MCP_LOG_LEVEL,
-    logsPath: env.LOGS_DIR,
     environment: env.NODE_ENV,
     mcpTransportType: env.MCP_TRANSPORT_TYPE,
     mcpSessionMode: env.MCP_SESSION_MODE,
@@ -349,41 +269,10 @@ const parseConfig = () => {
                 .filter(Boolean),
           }
         : undefined,
-    supabase:
-      env.SUPABASE_URL && env.SUPABASE_ANON_KEY
-        ? {
-            url: env.SUPABASE_URL,
-            anonKey: env.SUPABASE_ANON_KEY,
-            serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
-          }
-        : undefined,
-    storage: {
-      providerType: env.STORAGE_PROVIDER_TYPE,
-      filesystemPath: env.STORAGE_FILESYSTEM_PATH,
-    },
-    git: {
-      provider: env.GIT_PROVIDER,
-      signCommits: env.GIT_SIGN_COMMITS,
-      // Support multiple naming conventions for author/committer
-      // Priority: GIT_AUTHOR_NAME > GIT_USERNAME > GIT_USER
-      authorName:
-        env.GIT_AUTHOR_NAME || env.GIT_USERNAME || env.GIT_USER || undefined,
-      authorEmail:
-        env.GIT_AUTHOR_EMAIL ||
-        env.GIT_EMAIL ||
-        env.GIT_USER_EMAIL ||
-        undefined,
-      committerName:
-        env.GIT_COMMITTER_NAME || env.GIT_USERNAME || env.GIT_USER || undefined,
-      committerEmail:
-        env.GIT_COMMITTER_EMAIL ||
-        env.GIT_EMAIL ||
-        env.GIT_USER_EMAIL ||
-        undefined,
-      wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
-      baseDir: env.GIT_BASE_DIR,
-      maxCommandTimeoutMs: env.GIT_MAX_COMMAND_TIMEOUT_MS,
-      maxBufferSizeMb: env.GIT_MAX_BUFFER_SIZE_MB,
+    review: {
+      baseDir: env.REVIEW_BASE_DIR,
+      maxCommandTimeoutMs: env.REVIEW_MAX_COMMAND_TIMEOUT_MS,
+      maxBufferSizeMb: env.REVIEW_MAX_BUFFER_SIZE_MB,
     },
     openTelemetry: {
       enabled: env.OTEL_ENABLED,
@@ -412,7 +301,6 @@ const parseConfig = () => {
   const finalRawConfig = {
     ...rawConfig,
     pkg: parsedPkg,
-    logsPath: rawConfig.logsPath,
     mcpServerName: env.MCP_SERVER_NAME ?? parsedPkg.name,
     mcpServerVersion: env.MCP_SERVER_VERSION ?? parsedPkg.version,
     mcpServerDescription: env.MCP_SERVER_DESCRIPTION ?? parsedPkg.description,
@@ -443,7 +331,25 @@ const parseConfig = () => {
     );
   }
 
-  return parsedConfig.data;
+  let canonicalBaseDir: string;
+  try {
+    canonicalBaseDir = realpathSync(parsedConfig.data.review.baseDir);
+    if (!statSync(canonicalBaseDir).isDirectory()) {
+      throw new Error('not a directory');
+    }
+  } catch (error) {
+    throw new McpError(
+      JsonRpcErrorCode.ConfigurationError,
+      'REVIEW_BASE_DIR must exist and resolve to a directory.',
+      { baseDir: parsedConfig.data.review.baseDir },
+      { cause: error },
+    );
+  }
+
+  return {
+    ...parsedConfig.data,
+    review: { ...parsedConfig.data.review, baseDir: canonicalBaseDir },
+  };
 };
 
 const config = parseConfig();

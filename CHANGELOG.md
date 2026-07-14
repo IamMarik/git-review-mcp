@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased - Repo Review MCP hard fork
+
+### Changed
+
+- Renamed the product to Repo Review MCP, package `@iammarik/repo-review-mcp`,
+  with the description "A read-only MCP server designed specifically for AI
+  code review workflows."
+- Replaced the upstream general-purpose Git API with exactly five typed tools:
+  `review_status`, `review_diff`, `review_log`, `review_changed_file`, and
+  `review_file_at_revision`.
+- Replaced mutable session working-directory state with repository selectors
+  constrained beneath required `REVIEW_BASE_DIR`.
+- Added deterministic stateless snapshots, strict revision validation, bounded
+  output, binary rejection, secret-path blocking, and credential redaction.
+- Kept structured logging while removing filesystem-backed log destinations so
+  production code contains no file-writing API.
+- Disabled external diff, textconv, filesystem-monitor, and untracked-cache
+  extension points during review commands.
+
+### Removed
+
+- Removed every production write-capable Git tool, provider method,
+  implementation, configuration field, prompt, resource, and generic arbitrary
+  Git argument execution path inherited from upstream.
+- Removed write-oriented skills, examples, and current-product documentation.
+
+All entries below this section describe historical upstream releases and are
+preserved for attribution and provenance; their write-capable APIs are not part
+of Repo Review MCP.
+
 ## v2.15.1 - 2026-05-06
 
 Closes [#47](https://github.com/cyanheads/git-mcp-server/issues/47): `git_remote.url` was emitted as `format: "uri"` in the JSON Schema, which OpenAI's tool validator rejects (`'uri' is not a valid format`). The provider already accepted SSH (`git@host:path`), `git://`, `file://`, and bare paths — only the schema was rejecting them, and only OpenAI clients surfaced it. Mirrors the same `.url()` → `.min(1)` change applied to `git_clone.url` in v2.15.0. Sweeps the remaining `format`-emitting Zod call (`git_commit.author.email`'s `.email()`) at the same time so a stricter client doesn't surface the next variant of this bug.

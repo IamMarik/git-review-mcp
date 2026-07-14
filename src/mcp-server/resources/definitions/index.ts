@@ -4,11 +4,14 @@
  * @module src/mcp-server/resources/definitions
  */
 
-import { gitWorkingDirectoryResource } from './git-working-directory.resource.js';
-
 /**
  * An array containing all resource definitions for easy iteration.
  * This is used by the registration system to automatically discover and register
  * all available resources.
  */
-export const allResourceDefinitions = [gitWorkingDirectoryResource];
+import type { ResourceDefinition } from '../utils/resourceDefinition.js';
+import type { ZodObject, ZodRawShape } from 'zod';
+
+export const allResourceDefinitions: ResourceDefinition<
+  ZodObject<ZodRawShape>
+>[] = [];

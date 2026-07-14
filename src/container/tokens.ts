@@ -8,13 +8,9 @@
 // Use tokens for non-class dependencies or for multi-injection.
 export const AppConfig = Symbol('AppConfig');
 export const Logger = Symbol('Logger');
-export const StorageService = Symbol('StorageService');
-export const StorageProvider = Symbol('IStorageProvider');
 export const ToolDefinitions = Symbol('ToolDefinitions');
 export const ResourceDefinitions = Symbol('ResourceDefinitions');
 export const CreateMcpServerInstance = Symbol('CreateMcpServerInstance');
 export const RateLimiterService = Symbol('RateLimiterService');
 export const TransportManagerToken = Symbol('TransportManager');
-export const SupabaseAdminClient = Symbol('SupabaseAdminClient');
-export const GitProvider = Symbol('IGitProvider');
-export const GitProviderFactory = Symbol('GitProviderFactory');
+export const ReviewProvider = Symbol('IReviewProvider');

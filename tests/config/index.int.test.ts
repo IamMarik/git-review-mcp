@@ -24,19 +24,16 @@ describe('Configuration Service', () => {
     const { parseConfig } = await import('../../src/config/index.js');
     // Unset variables to ensure defaults are tested
     delete process.env.NODE_ENV;
-    delete process.env.STORAGE_PROVIDER_TYPE;
     const config = parseConfig();
     expect(config.environment).toBe('development');
     expect(config.logLevel).toBe('debug');
     expect(config.mcpHttpPort).toBe(3015);
-    expect(config.storage.providerType).toBe('in-memory');
   });
 
   it('should override default values with environment variables', async () => {
     process.env.NODE_ENV = 'production';
     process.env.MCP_LOG_LEVEL = 'warn';
     process.env.MCP_HTTP_PORT = '8080';
-    process.env.STORAGE_PROVIDER_TYPE = 'filesystem';
 
     const { parseConfig } = await import('../../src/config/index.js');
     const config = parseConfig();
@@ -44,7 +41,6 @@ describe('Configuration Service', () => {
     expect(config.environment).toBe('production');
     expect(config.logLevel).toBe('warn');
     expect(config.mcpHttpPort).toBe(8080);
-    expect(config.storage.providerType).toBe('filesystem');
   });
 
   it('should correctly reflect the environment', async () => {
@@ -85,16 +81,6 @@ describe('Configuration Service', () => {
       process.env.NODE_ENV = 'test';
       const { parseConfig: p3 } = await import('../../src/config/index.js');
       expect(p3().environment).toBe('testing');
-    });
-
-    it('should handle aliases for storage.providerType', async () => {
-      process.env.STORAGE_PROVIDER_TYPE = 'mem';
-      const { parseConfig: p1 } = await import('../../src/config/index.js');
-      expect(p1().storage.providerType).toBe('in-memory');
-
-      process.env.STORAGE_PROVIDER_TYPE = 'fs';
-      const { parseConfig: p2 } = await import('../../src/config/index.js');
-      expect(p2().storage.providerType).toBe('filesystem');
     });
 
     it('should handle aliases for openTelemetry.logLevel', async () => {
@@ -147,15 +133,6 @@ describe('Configuration Service', () => {
     expect(config.openTelemetry.serviceVersion).toBeTruthy();
   });
 
-  it('should handle storage configuration', async () => {
-    process.env.STORAGE_PROVIDER_TYPE = 'filesystem';
-    process.env.STORAGE_FILESYSTEM_PATH = '/tmp/test-storage';
-    const { parseConfig } = await import('../../src/config/index.js');
-    const config = parseConfig();
-    expect(config.storage.providerType).toBe('filesystem');
-    expect(config.storage.filesystemPath).toBe('/tmp/test-storage');
-  });
-
   it('should build oauth proxy configuration when env values are provided', async () => {
     process.env.OAUTH_PROXY_AUTHORIZATION_URL = 'https://auth.example.com';
     process.env.OAUTH_PROXY_TOKEN_URL = 'https://token.example.com';
@@ -179,21 +156,6 @@ describe('Configuration Service', () => {
         'https://app.example.com/callback',
         'https://app.example.com/alt',
       ],
-    });
-  });
-
-  it('should add supabase configuration when url and anon key are set', async () => {
-    process.env.SUPABASE_URL = 'https://supabase.example.com';
-    process.env.SUPABASE_ANON_KEY = 'anon-key';
-    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
-
-    const { parseConfig } = await import('../../src/config/index.js');
-    const config = parseConfig();
-
-    expect(config.supabase).toEqual({
-      url: 'https://supabase.example.com',
-      anonKey: 'anon-key',
-      serviceRoleKey: 'service-role-key',
     });
   });
 });

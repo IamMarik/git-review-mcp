@@ -1,1011 +1,124 @@
 /**
- * @fileoverview Type definitions for Git service operations
+ * @fileoverview Read-only repository review service types.
  * @module services/git/types
- *
- * This module provides comprehensive TypeScript interfaces for all git operations
- * supported by the git-mcp-server. These types are used by both the CLI provider
- * (wrapping git binary) and the isomorphic provider (isomorphic-git for edge).
  */
 
 import type { RequestContext } from '@/utils/index.js';
 
-// ============================================================================
-// Base Context
-// ============================================================================
+export type ReviewDiffScope =
+  'working' | 'staged' | 'unstaged' | 'last_commit' | 'commit' | 'range';
 
-/**
- * Base context for all git operations.
- *
- * Contains the necessary information for executing git commands, including
- * logging context, working directory, and optional tenant information for
- * multi-tenant deployments.
- */
-export interface GitOperationContext {
-  /** Request context for logging and tracing */
+export interface ReviewOperationContext {
   requestContext: RequestContext;
-  /** Working directory (repository path) */
-  workingDirectory: string;
-  /** Optional tenant ID for multi-tenancy */
-  tenantId?: string;
+  tenantId: string;
 }
 
-// ============================================================================
-// Provider Capabilities
-// ============================================================================
-
-/**
- * Capabilities supported by a git provider.
- *
- * Different providers have different capabilities:
- * - CLI Provider: All capabilities (full git binary feature set)
- * - Isomorphic Provider: Limited (core operations for edge environments)
- */
-export interface GitProviderCapabilities {
-  /** Can perform git init */
-  init: boolean;
-  /** Can perform git clone */
-  clone: boolean;
-  /** Can create commits */
-  commit: boolean;
-  /** Can manage branches */
-  branch: boolean;
-  /** Can merge branches */
-  merge: boolean;
-  /** Can rebase commits */
-  rebase: boolean;
-  /** Can manage remotes */
-  remote: boolean;
-  /** Can fetch from remotes */
-  fetch: boolean;
-  /** Can push to remotes */
-  push: boolean;
-  /** Can pull from remotes */
-  pull: boolean;
-  /** Can create tags */
-  tag: boolean;
-  /** Can stash changes */
-  stash: boolean;
-  /** Can manage worktrees */
-  worktree: boolean;
-  /** Can perform git blame */
-  blame: boolean;
-  /** Can view reflog */
-  reflog: boolean;
-  /** Can sign commits (GPG/SSH) */
-  signCommits: boolean;
-  /** Supports SSH authentication */
-  sshAuth: boolean;
-  /** Supports HTTP/HTTPS authentication */
-  httpAuth: boolean;
-  /** Maximum recommended repository size in MB */
-  maxRepoSizeMB: number;
+export interface ReviewStatusInput {
+  repository: string;
 }
 
-// ============================================================================
-// Repository Operations
-// ============================================================================
-
-export interface GitInitOptions {
-  /** Path where repository should be initialized */
-  path: string;
-  /** Initial branch name (default: main) */
-  initialBranch?: string;
-  /** Create bare repository */
-  bare?: boolean;
-}
-
-export interface GitInitResult {
-  /** Operation success status */
-  success: boolean;
-  /** Repository path */
-  path: string;
-  /** Initial branch name */
-  initialBranch: string;
-  /** Whether repository is bare */
-  bare: boolean;
-}
-
-export interface GitCloneOptions {
-  /** Remote repository URL */
-  remoteUrl: string;
-  /** Local path for cloned repository */
-  localPath: string;
-  /** Branch to checkout (default: remote's default branch) */
-  branch?: string;
-  /** Create shallow clone with limited history */
-  depth?: number;
-  /** Clone as bare repository */
-  bare?: boolean;
-  /** Create mirror clone (implies bare) */
-  mirror?: boolean;
-  /** Include submodules */
-  recurseSubmodules?: boolean;
-}
-
-export interface GitCloneResult {
-  /** Operation success status */
-  success: boolean;
-  /** Local repository path */
-  localPath: string;
-  /** Remote URL */
-  remoteUrl: string;
-  /** Checked out branch */
-  branch: string;
-  /** Current HEAD commit hash */
-  commitHash?: string;
-}
-
-export interface GitCleanOptions {
-  /** Force deletion (required for safety) */
-  force: boolean;
-  /** Dry run (preview what would be deleted) */
-  dryRun?: boolean;
-  /** Remove directories */
-  directories?: boolean;
-  /** Remove ignored files */
-  ignored?: boolean;
-  /** Interactive mode (not supported in all providers) */
-  interactive?: boolean;
-}
-
-export interface GitCleanResult {
-  /** Operation success status */
-  success: boolean;
-  /** Files that were (or would be) removed */
-  filesRemoved: string[];
-  /** Directories that were (or would be) removed */
-  directoriesRemoved: string[];
-  /** Whether this was a dry run */
-  dryRun: boolean;
-}
-
-// ============================================================================
-// Status & Information
-// ============================================================================
-
-export interface GitStatusOptions {
-  /** Include untracked files */
-  includeUntracked?: boolean;
-  /** Ignore submodules */
-  ignoreSubmodules?: boolean;
-}
-
-export interface GitStatusResult {
-  /** Current branch name (null if detached HEAD) */
-  currentBranch: string | null;
-  /** Upstream ref the current branch is tracking (from porcelain v2 `# branch.upstream`). */
-  upstream?: string;
-  /** Commits ahead of upstream (from porcelain v2 `# branch.ab`). */
-  ahead?: number;
-  /** Commits behind upstream (from porcelain v2 `# branch.ab`). */
-  behind?: number;
-  /** Changes staged for commit */
-  stagedChanges: {
-    added?: string[];
-    modified?: string[];
-    deleted?: string[];
-    renamed?: string[];
-    copied?: string[];
-  };
-  /** Changes not staged for commit */
-  unstagedChanges: {
-    added?: string[];
-    modified?: string[];
-    deleted?: string[];
-  };
-  /** Untracked files */
-  untrackedFiles: string[];
-  /** Files with merge conflicts */
-  conflictedFiles: string[];
-  /** Whether working directory is clean */
-  isClean: boolean;
-}
-
-// ============================================================================
-// Commit Operations
-// ============================================================================
-
-export interface GitAddOptions {
-  /** File paths to stage (relative to repository root) */
-  paths: string[];
-  /** Stage all changes */
-  all?: boolean;
-  /** Update tracked files only */
-  update?: boolean;
-  /** Force add (include ignored files) */
-  force?: boolean;
-  /** Interactive patch mode (not supported in all providers) */
-  patch?: boolean;
-}
-
-export interface GitAddResult {
-  /** Operation success status */
-  success: boolean;
-  /** Files that were staged */
-  stagedFiles: string[];
-}
-
-export interface GitCommitOptions {
-  /** Commit message */
-  message: string;
-  /** Author information (uses git config if not provided) */
-  author?: {
-    name: string;
-    email: string;
-  };
-  /** Amend previous commit */
-  amend?: boolean;
-  /** Allow empty commit */
-  allowEmpty?: boolean;
-  /** Skip pre-commit and commit-msg hooks */
-  noVerify?: boolean;
-  /** File paths to stage before committing (atomic stage+commit operation) */
-  filesToStage?: string[];
-}
-
-export interface GitCommitResult {
-  /** Operation success status */
-  success: boolean;
-  /** Commit hash (SHA-1) */
-  commitHash: string;
-  /** Commit message */
-  message: string;
-  /** Author name and email */
-  author: string;
-  /** Commit timestamp (Unix timestamp) */
-  timestamp: number;
-  /** Files changed in this commit */
-  filesChanged: string[];
-  /**
-   * Whether the commit was signed. True when signing was attempted and
-   * succeeded. False when `GIT_SIGN_COMMITS=false`, or when signing was
-   * attempted and silently fell back to unsigned on failure.
-   */
-  signed: boolean;
-  /**
-   * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and the commit was created unsigned as a fallback. Absent
-   * when signing succeeded or when signing was not requested at all.
-   */
-  signingWarning?: string;
-}
-
-export interface GitLogOptions {
-  /** Maximum number of commits to return */
-  maxCount?: number;
-  /** Number of commits to skip before starting output */
-  skip?: number;
-  /** Show commits more recent than this date */
-  since?: string;
-  /** Show commits older than this date */
-  until?: string;
-  /** Filter commits by author */
-  author?: string;
-  /** Filter commits that modified this path */
-  path?: string;
-  /** Filter commits by message content (grep) */
-  grep?: string;
-  /** Show commits from a specific branch or ref */
-  branch?: string;
-  /** Include GPG signature verification information */
-  showSignature?: boolean;
-  /** Show abbreviated one-line output (hash + subject only) */
-  oneline?: boolean;
-  /** Include file change statistics for each commit */
-  stat?: boolean;
-  /** Include full diff patch for each commit */
-  patch?: boolean;
-}
-
-export interface GitCommitInfo {
-  /** Full commit hash */
-  hash: string;
-  /** Short commit hash (7 chars) */
-  shortHash: string;
-  /** Author name. Omitted when the caller requested `oneline` (only hash and subject are fetched). */
-  author?: string;
-  /** Author email. Omitted in oneline mode. */
-  authorEmail?: string;
-  /** Commit timestamp (Unix seconds). Omitted in oneline mode. */
-  timestamp?: number;
-  /** Commit subject (first line of message) */
-  subject: string;
-  /** Commit body (rest of message) */
-  body?: string;
-  /** Parent commit hashes. Omitted in oneline mode. */
-  parents?: string[];
-  /** References (branches, tags) pointing to this commit */
-  refs?: string[];
-  /** File change statistics (when stat option is used) */
-  stat?: string;
-  /** Full diff patch (when patch option is used) */
-  patch?: string;
-}
-
-export interface GitLogResult {
-  /** List of commits */
-  commits: GitCommitInfo[];
-  /** Total number of commits returned */
-  totalCount: number;
-}
-
-export interface GitShowOptions {
-  /** Git object to show (commit, tree, blob, tag) */
-  object: string;
-  /** Output format */
-  format?: 'raw';
-  /** Include diffstat */
-  stat?: boolean;
-  /** View specific file at a given commit reference */
-  filePath?: string;
-}
-
-export interface GitShowResult {
-  /** Object identifier */
-  object: string;
-  /** Object type */
-  type: 'commit' | 'tree' | 'blob' | 'tag';
-  /** Object content */
-  content: string;
-  /** Additional metadata */
-  metadata?: Record<string, unknown>;
-}
-
-export interface GitDiffOptions {
-  /** First commit to compare (default: HEAD) */
-  commit1?: string;
-  /** Second commit to compare (default: working directory) */
-  commit2?: string;
-  /** Show diff of staged changes */
-  staged?: boolean;
-  /** Limit diff to specific path(s) */
-  paths?: string[];
-  /** Number of context lines */
-  unified?: number;
-  /** Include untracked files */
-  includeUntracked?: boolean;
-  /** Show statistics only (diffstat) */
-  stat?: boolean;
-  /** Show only names of changed files */
-  nameOnly?: boolean;
-  /** Filename patterns to exclude from diff output (e.g., lock files) */
-  excludePatterns?: string[];
-}
-
-export interface GitDiffResult {
-  /** Diff output (unified diff format) */
-  diff: string;
-  /** Number of files changed */
-  filesChanged?: number;
-  /** Number of insertions */
-  insertions?: number;
-  /** Number of deletions */
-  deletions?: number;
-  /** Whether diff contains binary files */
-  binary?: boolean;
-  /** Files that were excluded from the diff by exclude patterns */
-  excludedFiles?: string[];
-}
-
-// ============================================================================
-// Branch Operations
-// ============================================================================
-
-export interface GitBranchOptions {
-  /** Operation mode */
-  mode: 'list' | 'create' | 'delete' | 'rename' | 'show-current';
-  /** Branch name (for create/delete/rename) */
-  branchName?: string;
-  /** New branch name (for rename) */
-  newBranchName?: string;
-  /** Starting point for new branch */
-  startPoint?: string;
-  /** Force operation */
-  force?: boolean;
-  /** Include remote branches in list */
-  remote?: boolean;
-  /** Include both local and remote branches in list */
-  all?: boolean;
-  /** Filter to show only branches merged into specified commit (defaults to HEAD) */
-  merged?: boolean | string;
-  /** Filter to show only branches NOT merged into specified commit (defaults to HEAD) */
-  noMerged?: boolean | string;
-  /** Cap the number of branches returned in list mode (applied at the git command). */
-  limit?: number;
-}
-
-export interface GitBranchInfo {
-  /** Branch name */
-  name: string;
-  /** Whether this is the current branch */
-  current: boolean;
-  /** Commit hash at branch tip */
-  commitHash: string;
-  /** Upstream branch (if tracking) */
-  upstream?: string;
-  /** Commits ahead of upstream */
-  ahead?: number;
-  /** Commits behind upstream */
-  behind?: number;
-}
-
-/**
- * Result of a git branch operation.
- *
- * This is a discriminated union type based on the operation mode,
- * providing better type safety and inference.
- */
-export type GitBranchResult =
-  | {
-      /** List operation mode */
-      mode: 'list';
-      /** List of branches */
-      branches: GitBranchInfo[];
-    }
-  | {
-      /** Create operation mode */
-      mode: 'create';
-      /** Created branch name */
-      created: string;
-    }
-  | {
-      /** Delete operation mode */
-      mode: 'delete';
-      /** Deleted branch name */
-      deleted: string;
-    }
-  | {
-      /** Rename operation mode */
-      mode: 'rename';
-      /** Rename information */
-      renamed: { from: string; to: string };
-    }
-  | {
-      /** Show-current operation mode */
-      mode: 'show-current';
-      /** Current branch name, or null when HEAD is detached. */
-      current: string | null;
-    };
-
-export interface GitCheckoutOptions {
-  /** Branch name or commit hash to checkout */
-  target: string;
-  /** Create new branch */
-  createBranch?: boolean;
-  /** Force checkout (discard local changes) */
-  force?: boolean;
-  /** Checkout specific paths only */
-  paths?: string[];
-  /** Set up tracking for the new branch (requires createBranch) */
-  track?: boolean;
-}
-
-export interface GitCheckoutResult {
-  /** Operation success status */
-  success: boolean;
-  /** Checked out branch or commit */
-  target: string;
-  /** Whether a new branch was created */
-  branchCreated: boolean;
-  /** Files that were modified */
-  filesModified: string[];
-}
-
-export interface GitMergeOptions {
-  /** Branch to merge into current branch */
-  branch: string;
-  /** Merge strategy */
-  strategy?: 'ort' | 'recursive' | 'octopus' | 'ours' | 'subtree';
-  /** Prevent fast-forward merge */
-  noFastForward?: boolean;
-  /** Squash commits */
-  squash?: boolean;
-  /** Custom merge commit message */
-  message?: string;
-  /** Abort an in-progress merge that has conflicts */
-  abort?: boolean;
-}
-
-export interface GitMergeResult {
-  /** Operation success status */
-  success: boolean;
-  /** Merge strategy used */
-  strategy: string;
-  /** Whether merge was fast-forward */
-  fastForward: boolean;
-  /** Whether merge had conflicts */
-  conflicts: boolean;
-  /** Files with conflicts */
-  conflictedFiles: string[];
-  /** Files that were merged */
-  mergedFiles: string[];
-  /** Merge commit message */
-  message: string;
-}
-
-export interface GitRebaseOptions {
-  /** Rebase operation mode */
-  mode?: 'start' | 'continue' | 'abort' | 'skip';
-  /** Upstream branch to rebase onto (required for start mode) */
-  upstream?: string;
-  /** Branch to rebase (default: current) */
-  branch?: string;
-  /** Interactive rebase (not supported in all providers) */
-  interactive?: boolean;
-  /** Rebase onto different commit */
-  onto?: string;
-  /** Preserve merge commits */
-  preserve?: boolean;
-}
-
-export interface GitRebaseResult {
-  /** Operation success status */
-  success: boolean;
-  /** Whether rebase had conflicts */
-  conflicts: boolean;
-  /** Files with conflicts */
-  conflictedFiles: string[];
-  /** Number of commits rebased */
-  rebasedCommits: number;
-  /** Current commit during conflict */
-  currentCommit?: string;
-}
-
-export interface GitCherryPickOptions {
-  /** Commit hashes to cherry-pick */
-  commits: string[];
-  /** Don't create commit (stage changes only) */
-  noCommit?: boolean;
-  /** Continue after resolving conflicts */
-  continueOperation?: boolean;
-  /** Abort cherry-pick operation */
-  abort?: boolean;
-  /** For merge commits, specify which parent to follow (1 for first parent, 2 for second, etc.) */
-  mainline?: number;
-  /** Merge strategy to use for cherry-pick */
-  strategy?: 'ort' | 'recursive' | 'octopus' | 'ours' | 'subtree';
-  /** Add Signed-off-by line to the commit message */
-  signoff?: boolean;
-}
-
-export interface GitCherryPickResult {
-  /** Operation success status */
-  success: boolean;
-  /** Commits that were cherry-picked */
-  pickedCommits: string[];
-  /** Whether operation had conflicts */
-  conflicts: boolean;
-  /** Files with conflicts */
-  conflictedFiles: string[];
-}
-
-// ============================================================================
-// Remote Operations
-// ============================================================================
-
-export interface GitRemoteOptions {
-  /** Operation mode */
-  mode: 'list' | 'add' | 'remove' | 'rename' | 'get-url' | 'set-url';
-  /** Remote name */
-  name?: string;
-  /** Remote URL */
-  url?: string;
-  /** New remote name (for rename) */
-  newName?: string;
-  /** Set push URL separately */
-  push?: boolean;
-}
-
-export interface GitRemoteInfo {
-  /** Remote name */
-  name: string;
-  /** Fetch URL */
-  fetchUrl: string;
-  /** Push URL (may differ from fetch URL) */
-  pushUrl: string;
-}
-
-export interface GitRemoteResult {
-  /** Operation mode */
-  mode: string;
-  /** List of remotes (for list and get-url modes) */
-  remotes?: GitRemoteInfo[];
-  /** Remote URL (for get-url mode) */
-  url?: string;
-  /** Added remote (for add mode) */
-  added?: { name: string; url: string };
-  /** Removed remote name (for remove mode) */
-  removed?: string;
-  /** Rename information (for rename mode) */
-  renamed?: { from: string; to: string };
-}
-
-export interface GitFetchOptions {
-  /** Remote name (default: origin) */
-  remote?: string;
-  /** Prune deleted remote branches */
-  prune?: boolean;
-  /** Fetch tags */
-  tags?: boolean;
-  /** Fetch depth (for shallow fetch) */
-  depth?: number;
-}
-
-export interface GitFetchResult {
-  /** Operation success status */
-  success: boolean;
-  /** Remote name */
-  remote: string;
-  /** References that were fetched */
-  fetchedRefs: string[];
-  /** References that were pruned */
-  prunedRefs: string[];
-}
-
-export interface GitPushOptions {
-  /** Remote name (default: origin) */
-  remote?: string;
-  /** Branch name (default: current) */
-  branch?: string;
-  /** Force push */
-  force?: boolean;
-  /** Force with lease (safer force) */
-  forceWithLease?: boolean;
-  /** Set upstream tracking */
-  setUpstream?: boolean;
-  /** Push tags */
-  tags?: boolean;
-  /** Dry run */
-  dryRun?: boolean;
-  /** Delete the specified remote branch */
-  delete?: boolean;
-  /** Remote branch name to push to (if different from local branch name) */
-  remoteBranch?: string;
-}
-
-export interface GitPushResult {
-  /** Operation success status */
-  success: boolean;
-  /** Remote name */
-  remote: string;
-  /** Branch name */
-  branch: string;
-  /** Whether upstream was set */
-  upstreamSet: boolean;
-  /** References that were pushed */
-  pushedRefs: string[];
-  /** References that were rejected */
-  rejectedRefs: string[];
-}
-
-export interface GitPullOptions {
-  /** Remote name (default: origin) */
-  remote?: string;
-  /** Branch name (default: current) */
-  branch?: string;
-  /** Use rebase instead of merge */
-  rebase?: boolean;
-  /** Fast-forward only (fail if can't fast-forward) */
-  fastForwardOnly?: boolean;
-}
-
-export interface GitPullResult {
-  /** Operation success status */
-  success: boolean;
-  /** Remote name */
-  remote: string;
-  /** Branch name */
-  branch: string;
-  /** Integration strategy used */
-  strategy: 'merge' | 'rebase' | 'fast-forward';
-  /** Whether pull had conflicts */
-  conflicts: boolean;
-  /** Files with merge conflicts that need resolution */
-  conflictedFiles: string[];
-  /** Files that were changed by the pull */
-  filesChanged: string[];
-}
-
-// ============================================================================
-// Tag Operations
-// ============================================================================
-
-export interface GitTagOptions {
-  /** Operation mode */
-  mode: 'list' | 'create' | 'delete' | 'verify';
-  /** Tag name (for create/delete/verify) */
-  tagName?: string;
-  /** Commit to tag (default: HEAD) */
-  commit?: string;
-  /** Tag message (for annotated tags) */
-  message?: string;
-  /** Create annotated tag */
-  annotated?: boolean;
-  /** Force tag creation */
-  force?: boolean;
-  /** Cap the number of tags returned in list mode (applied at the git command). */
-  limit?: number;
-}
-
-export interface GitTagInfo {
-  /** Tag name */
-  name: string;
-  /** Commit hash */
-  commit: string;
-  /** Tag message subject — first line of the annotation (annotated tags only) */
-  message?: string;
-  /** Tag message body — remainder after the subject line (annotated tags only) */
-  annotationBody?: string;
-  /** Tagger name and email */
-  tagger?: string;
-  /** Tag creation timestamp */
-  timestamp?: number;
-}
-
-export interface GitTagResult {
-  /** Operation mode */
-  mode: string;
-  /** List of tags (for list mode) */
-  tags?: GitTagInfo[];
-  /** Created tag name (for create mode) */
-  created?: string;
-  /** Deleted tag name (for delete mode) */
-  deleted?: string;
-  /**
-   * Whether the created tag was signed. Only populated for create mode.
-   * True when signing was attempted and succeeded. False when
-   * `GIT_SIGN_COMMITS=false`, or when signing failed and fell back to
-   * unsigned silently.
-   */
-  signed?: boolean;
-  /**
-   * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and the tag was created unsigned as a fallback. Absent
-   * when signing succeeded or when signing was not requested at all.
-   */
-  signingWarning?: string;
-  /**
-   * Verified tag name (for verify mode). Echoes the input so callers
-   * can correlate results with requests in batched flows.
-   */
-  verifiedTag?: string;
-  /**
-   * Whether the tag signature validated. Only populated for verify mode.
-   * - `true`: signature validates against a trusted key
-   * - `false`: unsigned, bad signature, or local environment cannot
-   *   verify (e.g., missing `gpg.ssh.allowedSignersFile`). See `warning`
-   *   for the distinguishing detail.
-   */
-  verified?: boolean;
-  /**
-   * Signature algorithm family when detectable from `git tag -v` output.
-   * Absent for unsigned tags and when the format couldn't be parsed.
-   */
-  signatureType?: 'gpg' | 'ssh' | 'x509';
-  /**
-   * Signer identity as emitted by git (e.g., `Name <email>` for GPG, or
-   * the principal key identifier for SSH). Absent for unsigned/unparseable
-   * output.
-   */
-  signerIdentity?: string;
-  /**
-   * Key material emitted by git — GPG fingerprint/key ID, or SSH key
-   * fingerprint (`SHA256:…`). Absent when git didn't surface it.
-   */
-  signerKey?: string;
-  /**
-   * Populated on verify failure with a human-readable reason distinguishing
-   * unsigned tags, missing trust configuration, bad signatures, and
-   * unparseable verification output. Absent on successful verification.
-   */
-  warning?: string;
-  /**
-   * Raw stderr captured from `git tag -v`, preserved for callers who need
-   * to inspect the full verification output. Only populated for verify mode.
-   */
-  rawOutput?: string;
-}
-
-// ============================================================================
-// Stash Operations
-// ============================================================================
-
-export interface GitStashOptions {
-  /** Operation mode */
-  mode: 'list' | 'push' | 'pop' | 'apply' | 'drop' | 'clear';
-  /** Stash message (for push) */
-  message?: string;
-  /** Stash reference (for pop/apply/drop) */
-  stashRef?: string;
-  /** Include untracked files */
-  includeUntracked?: boolean;
-  /** Keep index (don't revert staged changes) */
-  keepIndex?: boolean;
-  /** Cap the number of stash entries returned in list mode (applied at the git command). */
-  limit?: number;
-}
-
-export interface GitStashInfo {
-  /** Stash reference (e.g., stash@{0}) */
-  ref: string;
-  /** Stash index */
-  index: number;
-  /** Branch name when stashed */
-  branch: string;
-  /** Stash description */
-  description: string;
-  /** Stash creation timestamp */
-  timestamp: number;
-}
-
-export interface GitStashResult {
-  /** Operation mode */
-  mode: string;
-  /** List of stashes (for list mode) */
-  stashes?: GitStashInfo[];
-  /** Created stash reference (for push mode) */
-  created?: string;
-  /** Applied stash reference (for pop/apply mode) */
-  applied?: string;
-  /** Dropped stash reference (for drop mode) */
-  dropped?: string;
-  /** Whether operation had conflicts */
-  conflicts?: boolean;
-}
-
-// ============================================================================
-// Worktree Operations
-// ============================================================================
-
-export interface GitWorktreeOptions {
-  /** Operation mode */
-  mode: 'list' | 'add' | 'remove' | 'move' | 'prune';
-  /** Worktree path */
-  path?: string;
-  /** New worktree path (for move) */
-  newPath?: string;
-  /** Commit-ish to checkout */
-  commitish?: string;
-  /** Branch name */
-  branch?: string;
-  /** Force operation */
-  force?: boolean;
-  /** Create detached HEAD */
-  detach?: boolean;
-  /** Provide detailed output for worktree operations */
-  verbose?: boolean;
-  /** Preview the operation without executing it (for prune operation) */
-  dryRun?: boolean;
-}
-
-export interface GitWorktreeInfo {
-  /** Worktree path */
-  path: string;
-  /** HEAD commit */
-  head: string;
-  /** Branch name (if not detached) */
-  branch?: string;
-  /** Whether worktree is bare */
-  bare: boolean;
-  /** Whether HEAD is detached */
+export interface ReviewStatusResult {
+  repository: string;
+  branch: string | null;
   detached: boolean;
-  /** Whether worktree is locked */
-  locked: boolean;
-  /** Whether worktree is prunable */
-  prunable: boolean;
+  headSha: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+  conflicts: string[];
+  snapshotId: string;
+  truncated: boolean;
+  totalChangedFiles: number;
 }
 
-export interface GitWorktreeResult {
-  /** Operation mode */
-  mode: string;
-  /** List of worktrees (for list mode) */
-  worktrees?: GitWorktreeInfo[];
-  /** Added worktree path (for add mode) */
-  added?: string;
-  /** Removed worktree path (for remove mode) */
-  removed?: string;
-  /** Move information (for move mode) */
-  moved?: { from: string; to: string };
-  /** Pruned worktree paths (for prune mode) */
-  pruned?: string[];
+export interface ReviewCommitSummary {
+  sha: string;
+  subject: string;
+  authorDate: string;
+  authorName?: string;
 }
 
-// ============================================================================
-// Additional Operations
-// ============================================================================
-
-export interface GitResetOptions {
-  /** Reset mode */
-  mode: 'soft' | 'mixed' | 'hard' | 'merge' | 'keep';
-  /** Commit to reset to (default: HEAD) */
-  commit?: string;
-  /** Specific paths to reset */
-  paths?: string[];
+export interface ReviewDiffInput {
+  repository: string;
+  scope: ReviewDiffScope;
+  revision?: string;
+  baseRevision?: string;
+  headRevision?: string;
+  expectedSnapshotId?: string;
+  maxPatchBytes: number;
 }
 
-export interface GitResetResult {
-  /** Operation success status */
-  success: boolean;
-  /** Reset mode */
-  mode: string;
-  /** Commit hash after reset */
-  commit: string;
-  /** Commit hash before reset (omitted if HEAD did not move) */
-  previousCommit?: string;
-  /**
-   * Files affected by the reset.
-   *
-   * - For path-specific reset: the paths that were unstaged.
-   * - For commit-move reset (any mode): files that differ between the old and
-   *   new HEAD — i.e. the content the reset is rewinding/advancing past.
-   * - For `--hard` with no HEAD move: files that had pending working-tree
-   *   changes which were discarded.
-   */
-  filesReset: string[];
+export interface ReviewDiffStat {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  binaryFiles: number;
 }
 
-export interface GitBlameOptions {
-  /** File path to blame (relative to repository root) */
-  file: string;
-  /** Start line number (1-indexed) */
-  startLine?: number;
-  /** End line number (1-indexed) */
-  endLine?: number;
-  /** Ignore whitespace changes */
-  ignoreWhitespace?: boolean;
+export interface ReviewDiffResult {
+  repository: string;
+  scope: ReviewDiffScope;
+  snapshotId: string;
+  base?: ReviewCommitSummary;
+  head?: ReviewCommitSummary;
+  changedFiles: string[];
+  changedFilesTruncated: boolean;
+  totalChangedFiles: number;
+  omittedSecretPaths: string[];
+  diffStat: ReviewDiffStat;
+  patch: string;
+  truncation: {
+    truncated: boolean;
+    maxBytes: number;
+    originalBytes: number;
+    returnedBytes: number;
+  };
 }
 
-export interface GitBlameLine {
-  /** Line number */
-  lineNumber: number;
-  /** Commit hash */
-  commitHash: string;
-  /** Author name */
-  author: string;
-  /** Commit timestamp */
-  timestamp: number;
-  /** Line content */
+export interface ReviewLogInput {
+  repository: string;
+  limit: number;
+  includeAuthorName: boolean;
+}
+
+export interface ReviewLogResult {
+  repository: string;
+  commits: ReviewCommitSummary[];
+  limit: number;
+}
+
+export interface ReviewFileInput {
+  repository: string;
+  path: string;
+  byteLimit: number;
+  lineLimit: number;
+  expectedSnapshotId?: string;
+}
+
+export interface ReviewFileAtRevisionInput extends ReviewFileInput {
+  revision: string;
+}
+
+export interface ReviewFileResult {
+  repository: string;
+  path: string;
   content: string;
-}
-
-export interface GitBlameResult {
-  /** Operation success status */
-  success: boolean;
-  /** File path */
-  file: string;
-  /** Blame information for each line */
-  lines: GitBlameLine[];
-  /** Total number of lines */
-  totalLines: number;
-}
-
-export interface GitReflogOptions {
-  /** Reference to show reflog for (default: HEAD) */
-  ref?: string;
-  /** Maximum number of entries to return */
-  maxCount?: number;
-}
-
-export interface GitReflogEntry {
-  /** Commit hash */
-  hash: string;
-  /** Reference name (e.g., HEAD@{0}) */
-  refName: string;
-  /** Action performed (e.g., commit, checkout) */
-  action: string;
-  /** Action description */
-  message: string;
-  /** Action timestamp */
-  timestamp: number;
-}
-
-export interface GitReflogResult {
-  /** Operation success status */
-  success: boolean;
-  /** Reference name */
-  ref: string;
-  /** Reflog entries */
-  entries: GitReflogEntry[];
-  /** Total number of entries */
-  totalEntries: number;
+  redacted: boolean;
+  redactionCount: number;
+  snapshotId?: string;
+  revision?: string;
+  blobSha?: string;
+  blobSize?: number;
+  truncation: {
+    truncated: boolean;
+    byteLimit: number;
+    lineLimit: number;
+    originalBytes: number;
+    returnedBytes: number;
+    originalLines?: number;
+    returnedLines: number;
+  };
 }
