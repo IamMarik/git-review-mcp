@@ -2,7 +2,18 @@
  * @fileoverview Integration tests for the read-only CLI review boundary.
  * @module tests/services/git/providers/cli/CliReviewProvider
  */
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import {
+  mkdtemp,
+  mkdir,
+  open as openFile,
+  readFile,
+  realpath,
+  symlink,
+  unlink,
+  writeFile,
+  type FileHandle,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,6 +49,34 @@ function context() {
   };
 }
 
+function observableHandle(handle: FileHandle, onClose: () => void) {
+  return {
+    fd: handle.fd,
+    stat: () => handle.stat(),
+    read: (buffer: Buffer, offset: number, length: number, position: number) =>
+      handle.read(buffer, offset, length, position),
+    close: async () => {
+      onClose();
+      await handle.close();
+    },
+  };
+}
+
+function supportedCurrentFileIo(onClose: () => void = () => {}) {
+  const openedPaths = new Map<number, string>();
+  return {
+    open: async (filePath: string, flags: number) => {
+      const handle = await openFile(filePath, flags);
+      openedPaths.set(handle.fd, filePath);
+      return observableHandle(handle, onClose);
+    },
+    descriptorPaths: (fd: number) => {
+      const openedPath = openedPaths.get(fd);
+      return openedPath === undefined ? [] : [openedPath];
+    },
+  };
+}
+
 async function snapshotRepository(
   repo: string,
 ): Promise<Record<string, string>> {
@@ -62,6 +101,7 @@ async function snapshotRepository(
 
 describe('CliReviewProvider', () => {
   let base: string;
+  let canonicalBase: string;
   let repo: string;
   let provider: CliReviewProvider;
   let firstSha: string;
@@ -69,6 +109,7 @@ describe('CliReviewProvider', () => {
 
   beforeEach(async () => {
     base = await mkdtemp(path.join(tmpdir(), 'repo-review-'));
+    canonicalBase = await realpath(base);
     repo = path.join(base, 'project');
     await mkdir(repo);
     git(repo, 'init', '-b', 'main');
@@ -97,7 +138,12 @@ describe('CliReviewProvider', () => {
       'token=visible-token\nline two\nline three\n',
     );
     await writeFile(path.join(repo, '.env'), 'API_KEY=must-not-leak\n');
-    provider = await CliReviewProvider.create(base);
+    provider = new CliReviewProvider(
+      canonicalBase,
+      30_000,
+      10,
+      supportedCurrentFileIo(),
+    );
   });
 
   it('has an exact read-only allowlist and fails closed', () => {
@@ -130,6 +176,272 @@ describe('CliReviewProvider', () => {
         context(),
       ),
     ).resolves.toMatchObject({ repository: 'project' });
+  });
+
+  it('opens a regular changed file read-only with no-follow and closes it', async () => {
+    let openedFlags = 0;
+    let closeCount = 0;
+    const fileIo = supportedCurrentFileIo(() => {
+      closeCount += 1;
+    });
+    const safeProvider = new CliReviewProvider(canonicalBase, 30_000, 10, {
+      open: async (filePath, flags) => {
+        openedFlags = flags;
+        return await fileIo.open(filePath, flags);
+      },
+      descriptorPaths: fileIo.descriptorPaths,
+    });
+
+    const result = await safeProvider.changedFile(
+      {
+        repository: 'project',
+        path: 'untracked.txt',
+        byteLimit: 100_000,
+        lineLimit: 2_000,
+      },
+      context(),
+    );
+
+    expect(result.path).toBe('untracked.txt');
+    expect(openedFlags & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
+    expect(openedFlags & constants.O_WRONLY).toBe(0);
+    expect(openedFlags & constants.O_RDWR).toBe(0);
+    expect(closeCount).toBe(1);
+  });
+
+  it('rejects a symlink that exists before opening', async () => {
+    await writeFile(path.join(repo, 'inside-target.txt'), 'inside\n');
+    await symlink('inside-target.txt', path.join(repo, 'inside-link.txt'));
+
+    await expect(
+      provider.changedFile(
+        {
+          repository: 'project',
+          path: 'inside-link.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/Symbolic-link/);
+  });
+
+  it('rejects a symlink to a path outside the repository', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'repo-review-file-'));
+    const outsideFile = path.join(outside, 'outside.txt');
+    await writeFile(outsideFile, 'outside secret\n');
+    await symlink(outsideFile, path.join(repo, 'outside-link.txt'));
+
+    await expect(
+      provider.changedFile(
+        {
+          repository: 'project',
+          path: 'outside-link.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/Symbolic-link/);
+  });
+
+  it('fails closed when a checked file is replaced by a symlink before open', async () => {
+    const racePath = path.join(repo, 'race.txt');
+    await writeFile(racePath, 'safe before race\n');
+    const outside = await mkdtemp(path.join(tmpdir(), 'repo-review-race-'));
+    const outsideFile = path.join(outside, 'outside.txt');
+    await writeFile(outsideFile, 'outside secret\n');
+    let replacementPerformed = false;
+    const raceProvider = new CliReviewProvider(canonicalBase, 30_000, 10, {
+      open: async (filePath, flags) => {
+        await unlink(filePath);
+        await symlink(outsideFile, filePath);
+        replacementPerformed = true;
+        return await openFile(filePath, flags);
+      },
+    });
+
+    await expect(
+      raceProvider.changedFile(
+        {
+          repository: 'project',
+          path: 'race.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/Symbolic-link/);
+    expect(replacementPerformed).toBe(true);
+  });
+
+  it('fails closed when an untracked synthetic patch file is replaced before open', async () => {
+    const outside = await mkdtemp(
+      path.join(tmpdir(), 'repo-review-patch-race-'),
+    );
+    const outsideFile = path.join(outside, 'outside.txt');
+    await writeFile(outsideFile, 'outside secret\n');
+    let replacementPerformed = false;
+    const raceProvider = new CliReviewProvider(canonicalBase, 30_000, 10, {
+      open: async (filePath, flags) => {
+        await unlink(filePath);
+        await symlink(outsideFile, filePath);
+        replacementPerformed = true;
+        return await openFile(filePath, flags);
+      },
+    });
+
+    await expect(
+      raceProvider.diff(
+        {
+          repository: 'project',
+          scope: 'working',
+          maxPatchBytes: 200_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/Symbolic-link/);
+    expect(replacementPerformed).toBe(true);
+  });
+
+  it('rejects invalid UTF-8 from the untracked synthetic patch path', async () => {
+    await writeFile(
+      path.join(repo, 'invalid-utf8.txt'),
+      Buffer.from([0xc3, 0x28]),
+    );
+
+    await expect(
+      provider.diff(
+        {
+          repository: 'project',
+          scope: 'working',
+          maxPatchBytes: 200_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/invalid UTF-8/);
+  });
+
+  it('closes the descriptor when text validation fails', async () => {
+    await writeFile(
+      path.join(repo, 'invalid-current.txt'),
+      Buffer.from([0xf0, 0x28, 0x8c, 0x28]),
+    );
+    let closeCount = 0;
+    const fileIo = supportedCurrentFileIo(() => {
+      closeCount += 1;
+    });
+    const safeProvider = new CliReviewProvider(canonicalBase, 30_000, 10, {
+      open: fileIo.open,
+      descriptorPaths: fileIo.descriptorPaths,
+    });
+
+    await expect(
+      safeProvider.changedFile(
+        {
+          repository: 'project',
+          path: 'invalid-current.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/invalid UTF-8/);
+    expect(closeCount).toBe(1);
+  });
+
+  it('closes and rejects when the opened descriptor cannot prove containment', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'repo-review-fd-'));
+    const outsideFile = path.join(outside, 'outside.txt');
+    await writeFile(outsideFile, 'outside\n');
+    let closeCount = 0;
+    const safeProvider = new CliReviewProvider(canonicalBase, 30_000, 10, {
+      open: async (filePath, flags) =>
+        observableHandle(await openFile(filePath, flags), () => {
+          closeCount += 1;
+        }),
+      descriptorPaths: () => [outsideFile],
+    });
+
+    await expect(
+      safeProvider.changedFile(
+        {
+          repository: 'project',
+          path: 'untracked.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toThrow(/descriptor resolves outside/);
+    expect(closeCount).toBe(1);
+  });
+
+  it('does not fall back when no-follow support is unavailable', async () => {
+    let openCalled = false;
+    const unsupportedProvider = new CliReviewProvider(
+      canonicalBase,
+      30_000,
+      10,
+      {
+        noFollowFlag: undefined,
+        open: async (filePath, flags) => {
+          openCalled = true;
+          return await openFile(filePath, flags);
+        },
+      },
+    );
+
+    await expect(
+      unsupportedProvider.changedFile(
+        {
+          repository: 'project',
+          path: 'untracked.txt',
+          byteLimit: 100_000,
+          lineLimit: 2_000,
+        },
+        context(),
+      ),
+    ).rejects.toMatchObject({
+      data: { reason: 'no_follow_unavailable' },
+      message: expect.stringMatching(/host platform.*no-follow/i),
+    });
+    expect(openCalled).toBe(false);
+  });
+
+  it('reports secure current-file unavailability for a working diff with tracked changes', async () => {
+    let openCalled = false;
+    const unsupportedProvider = new CliReviewProvider(
+      canonicalBase,
+      30_000,
+      10,
+      {
+        noFollowFlag: undefined,
+        open: async (filePath, flags) => {
+          openCalled = true;
+          return await openFile(filePath, flags);
+        },
+      },
+    );
+
+    await expect(
+      unsupportedProvider.diff(
+        {
+          repository: 'project',
+          scope: 'working',
+          maxPatchBytes: 200_000,
+        },
+        context(),
+      ),
+    ).rejects.toMatchObject({
+      code: -32000,
+      data: {
+        path: 'untracked.txt',
+        reason: 'no_follow_unavailable',
+      },
+      message: expect.stringMatching(/secure current-file reads/i),
+    });
+    expect(openCalled).toBe(false);
   });
 
   it('enforces repository filesystem boundaries', async () => {

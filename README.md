@@ -68,8 +68,10 @@ directory itself is the repository.
 
 ## Installation and runtime
 
-Node.js 20+ and Bun 1.2+ are supported. This fork is not published as the
-upstream npm package; build it from the checked-out repository:
+Node.js 20+ and Bun 1.2+ are supported runtimes on hosts that meet the secure
+current-file platform requirements below; runtime version alone is not
+sufficient. This fork is not published as the upstream npm package; build it
+from the checked-out repository:
 
 ```sh
 bun install
@@ -100,6 +102,21 @@ Example MCP client configuration for a local checkout:
 
 For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`; the default bind address is
 `127.0.0.1:3015` with endpoint `/mcp`.
+
+## Secure current-file platform requirements
+
+Tracked status, history, and commit-diff operations rely on Git. Reading a
+current working-tree file—including generating a working diff for an untracked
+file—additionally requires a usable `O_NOFOLLOW` equivalent and descriptor
+containment verification through a resolvable `/proc/self/fd/<fd>` or
+`/dev/fd/<fd>` path.
+
+Version 0.1.0 starts only on hosts where a temporary startup probe verifies both
+capabilities against its expected directory. If the host cannot provide them,
+startup fails closed with a structured capability reason. Restricted containers
+and hosts without a usable descriptor filesystem can therefore be unsupported;
+Windows support is not verified or claimed for version 0.1.0. There is no
+insecure fallback and no ordinary symlink-following open path.
 
 ## Safe revisions
 

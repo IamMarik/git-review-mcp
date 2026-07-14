@@ -46,6 +46,8 @@ import container, {
   composeContainer,
 } from '@/container/index.js';
 import { TransportManager } from '@/mcp-server/transports/manager.js';
+import { assertSecureCurrentFileReadCapability } from '@/services/git/providers/cli/secureCurrentFile.js';
+import { McpError } from '@/types-global/errors.js';
 
 // The container is now composed in start(), so we must resolve config there.
 let config: typeof appConfigType;
@@ -104,9 +106,20 @@ const start = async (): Promise<void> => {
     composeContainer();
     // Now it's safe to resolve dependencies
     config = container.resolve<typeof appConfigType>(AppConfig);
-  } catch (_error) {
+    // Version 0.1.0 exposes all five tools or fails startup; there is no
+    // partially available current-file mode and no insecure open fallback.
+    await assertSecureCurrentFileReadCapability();
+  } catch (error) {
     // This will catch the McpError from parseConfig
-    if (process.stdout.isTTY) {
+    const capabilityReason =
+      error instanceof McpError && typeof error.data?.reason === 'string'
+        ? error.data.reason
+        : undefined;
+    if (capabilityReason !== undefined && error instanceof McpError) {
+      // stderr is safe for STDIO transport and the structured reason contains
+      // neither the temporary probe path nor the configured repository path.
+      console.error(`${error.message} (${capabilityReason})`);
+    } else if (process.stdout.isTTY) {
       // The config module already logged the details. We just provide a final message.
       console.error('Halting due to critical configuration error.');
     }

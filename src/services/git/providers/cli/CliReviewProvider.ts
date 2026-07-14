@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
-import { lstat, open, realpath, stat } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import crossSpawn from 'cross-spawn';
@@ -28,6 +28,14 @@ import type {
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger } from '@/utils/index.js';
 
+import {
+  DEFAULT_SECURE_CURRENT_FILE_IO,
+  resolveOpenedDescriptorPaths,
+  secureCurrentFileError,
+  secureReadOnlyFlags,
+  type SecureCurrentFileIo,
+} from './secureCurrentFile.js';
+
 export const READ_ONLY_GIT_SUBCOMMANDS = [
   'status',
   'diff',
@@ -42,7 +50,14 @@ export const READ_ONLY_GIT_SUBCOMMANDS = [
 export type ReadOnlyGitSubcommand = (typeof READ_ONLY_GIT_SUBCOMMANDS)[number];
 const READ_ONLY_COMMAND_SET = new Set<string>(READ_ONLY_GIT_SUBCOMMANDS);
 const MAX_STATUS_FILES = 500;
+const MAX_CURRENT_FILE_BYTES = 500_000;
 const SAFE_DIFF_FLAGS = ['--no-ext-diff', '--no-textconv'] as const;
+
+interface SafeCurrentTextFile {
+  path: string;
+  buffer: Buffer;
+  originalBytes: number;
+}
 
 /** Fail closed before any process is spawned. */
 export function assertReadOnlyGitSubcommand(
@@ -277,7 +292,10 @@ function truncateUtf8(
       truncated: false,
     };
   }
-  const clipped = source.subarray(0, maxBytes).toString('utf8');
+  let end = maxBytes;
+  const minimumEnd = Math.max(0, maxBytes - 3);
+  while (end >= minimumEnd && !isUtf8(source.subarray(0, end))) end -= 1;
+  const clipped = source.subarray(0, Math.max(0, end)).toString('utf8');
   return {
     value: clipped,
     originalBytes: source.byteLength,
@@ -286,13 +304,196 @@ function truncateUtf8(
   };
 }
 
+function currentFileError(error: unknown, safePath: string): McpError {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String(error.code)
+      : undefined;
+  if (code === 'ENOENT') {
+    return new McpError(
+      JsonRpcErrorCode.NotFound,
+      'Changed file is not present in the working tree.',
+      { path: safePath },
+      { cause: error },
+    );
+  }
+  if (code === 'ELOOP' || code === 'EMLINK') {
+    return new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Symbolic-link file reads are not permitted.',
+      { path: safePath },
+      { cause: error },
+    );
+  }
+  if (code === 'EINVAL' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') {
+    return secureCurrentFileError(
+      JsonRpcErrorCode.ServiceUnavailable,
+      'no_follow_unavailable',
+      safePath,
+    );
+  }
+  return new McpError(
+    JsonRpcErrorCode.InternalError,
+    'Unable to open changed file through the safe read-only path.',
+    { path: safePath },
+    { cause: error },
+  );
+}
+
+function boundedValidTextBuffer(
+  buffer: Buffer,
+  byteLimit: number,
+  completeFile: boolean,
+): Buffer {
+  if (buffer.includes(0) || (completeFile && !isUtf8(buffer))) {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      'Binary or invalid UTF-8 files are not reviewable as text.',
+    );
+  }
+  const maximumEnd = Math.min(buffer.length, byteLimit);
+  const minimumEnd = Math.max(0, maximumEnd - 3);
+  for (let end = maximumEnd; end >= minimumEnd; end -= 1) {
+    const candidate = buffer.subarray(0, end);
+    if (isUtf8(candidate)) return candidate;
+  }
+  throw new McpError(
+    JsonRpcErrorCode.ValidationError,
+    'Binary or invalid UTF-8 files are not reviewable as text.',
+  );
+}
+
+async function readSafeCurrentTextFile(
+  repositoryRoot: string,
+  filePath: string,
+  byteLimit: number,
+  io: SecureCurrentFileIo,
+): Promise<SafeCurrentTextFile> {
+  const safePath = validateReviewPath(filePath);
+  if (isBlockedSecretPath(safePath)) {
+    throw new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Secret or credential paths cannot be read.',
+      { path: safePath },
+    );
+  }
+  if (
+    !Number.isSafeInteger(byteLimit) ||
+    byteLimit < 1 ||
+    byteLimit > MAX_CURRENT_FILE_BYTES
+  ) {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      `Current-file byte limit must be between 1 and ${MAX_CURRENT_FILE_BYTES}.`,
+      { path: safePath, byteLimit },
+    );
+  }
+  let flags: number;
+  try {
+    flags = secureReadOnlyFlags(io);
+  } catch {
+    throw secureCurrentFileError(
+      JsonRpcErrorCode.ServiceUnavailable,
+      'no_follow_unavailable',
+      safePath,
+    );
+  }
+
+  const lexicalPath = path.resolve(repositoryRoot, safePath);
+  if (!isInside(repositoryRoot, lexicalPath)) {
+    throw new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Changed file path escapes the repository.',
+      { path: safePath },
+    );
+  }
+  const resolvedParent = await io
+    .realpath(path.dirname(lexicalPath))
+    .catch((error: unknown) => {
+      throw currentFileError(error, safePath);
+    });
+  if (!isInside(repositoryRoot, resolvedParent)) {
+    throw new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Changed file parent resolves outside the repository.',
+      { path: safePath },
+    );
+  }
+  const expectedPath = path.join(resolvedParent, path.basename(lexicalPath));
+  const handle = await io.open(expectedPath, flags).catch((error: unknown) => {
+    throw currentFileError(error, safePath);
+  });
+
+  try {
+    const openedStat = await handle.stat();
+    if (!openedStat.isFile()) {
+      throw new McpError(
+        JsonRpcErrorCode.ValidationError,
+        'Changed path is not a regular file.',
+        { path: safePath },
+      );
+    }
+    const descriptorPaths = await resolveOpenedDescriptorPaths(handle, io);
+    if (descriptorPaths.length === 0) {
+      throw secureCurrentFileError(
+        JsonRpcErrorCode.ServiceUnavailable,
+        'descriptor_path_unavailable',
+        safePath,
+      );
+    }
+    if (
+      !descriptorPaths.some((descriptorPath) =>
+        isInside(repositoryRoot, descriptorPath),
+      )
+    ) {
+      throw new McpError(
+        JsonRpcErrorCode.Forbidden,
+        'Opened changed-file descriptor resolves outside the repository.',
+        { path: safePath },
+      );
+    }
+
+    const capacity = Math.min(openedStat.size, byteLimit + 4);
+    const buffer = Buffer.alloc(capacity);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    const content = buffer.subarray(0, bytesRead);
+    return {
+      path: safePath,
+      buffer: boundedValidTextBuffer(
+        content,
+        byteLimit,
+        bytesRead >= openedStat.size,
+      ),
+      originalBytes: openedStat.size,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Native Git provider whose public methods are all review-only. */
 export class CliReviewProvider implements IReviewProvider {
   readonly #baseDirectory: string;
   readonly #timeoutMs: number;
   readonly #maxBufferBytes: number;
+  readonly #currentFileIo: SecureCurrentFileIo;
 
-  constructor(baseDirectory: string, timeoutMs = 30_000, maxBufferMb = 10) {
+  constructor(
+    baseDirectory: string,
+    timeoutMs = 30_000,
+    maxBufferMb = 10,
+    currentFileIo: Partial<SecureCurrentFileIo> = {},
+  ) {
     if (!path.isAbsolute(baseDirectory)) {
       throw new McpError(
         JsonRpcErrorCode.ConfigurationError,
@@ -303,6 +504,10 @@ export class CliReviewProvider implements IReviewProvider {
     this.#baseDirectory = baseDirectory;
     this.#timeoutMs = timeoutMs;
     this.#maxBufferBytes = maxBufferMb * 1024 * 1024;
+    this.#currentFileIo = {
+      ...DEFAULT_SECURE_CURRENT_FILE_IO,
+      ...currentFileIo,
+    };
   }
 
   static async create(
@@ -654,35 +859,26 @@ export class CliReviewProvider implements IReviewProvider {
     repository: ResolvedRepository,
     filePath: string,
     byteLimit: number,
-  ): Promise<{ patch: string; insertions: number; binary: boolean }> {
-    const safePath = validateReviewPath(filePath);
-    const absolute = path.resolve(repository.root, safePath);
-    const fileStat = await lstat(absolute).catch(() => undefined);
-    if (!fileStat || !fileStat.isFile() || fileStat.isSymbolicLink()) {
-      return { patch: '', insertions: 0, binary: false };
-    }
-    const resolved = await realpath(absolute);
-    if (!isInside(repository.root, resolved)) {
-      throw new McpError(
-        JsonRpcErrorCode.Forbidden,
-        'Changed file symlink escapes the repository.',
-        { path: safePath },
-      );
-    }
-    const handle = await open(resolved, 'r');
-    const buffer = Buffer.alloc(Math.min(fileStat.size, byteLimit) + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    await handle.close();
-    const contentBuffer = buffer.subarray(0, bytesRead);
-    if (contentBuffer.includes(0))
-      return { patch: '', insertions: 0, binary: true };
-    const content = contentBuffer.toString('utf8');
+  ): Promise<{ patch: string; insertions: number; truncated: boolean }> {
+    const current = await readSafeCurrentTextFile(
+      repository.root,
+      filePath,
+      byteLimit,
+      this.#currentFileIo,
+    );
+    const output = this.#readBoundedText(
+      current.buffer,
+      current.originalBytes,
+      byteLimit,
+      Number.MAX_SAFE_INTEGER,
+    );
+    const content = output.content;
     const lines = content.split('\n');
     const body = lines.map((line) => `+${line}`).join('\n');
     return {
-      patch: `diff --git a/${safePath} b/${safePath}\nnew file mode 100644\n--- /dev/null\n+++ b/${safePath}\n@@ -0,0 +1,${lines.length} @@\n${body}\n`,
+      patch: `diff --git a/${current.path} b/${current.path}\nnew file mode 100644\n--- /dev/null\n+++ b/${current.path}\n@@ -0,0 +1,${lines.length} @@\n${body}\n`,
       insertions: lines.length,
-      binary: false,
+      truncated: output.truncation.truncated,
     };
   }
 
@@ -797,6 +993,7 @@ export class CliReviewProvider implements IReviewProvider {
     );
     let patch = '';
     let statOutput = '';
+    let currentFileTruncated = false;
     if (trackedSafePaths.length > 0) {
       const patchCommand =
         input.scope === 'last_commit' || input.scope === 'commit'
@@ -844,7 +1041,7 @@ export class CliReviewProvider implements IReviewProvider {
         );
         patch += untracked.patch;
         diffStat.insertions += untracked.insertions;
-        if (untracked.binary) diffStat.binaryFiles += 1;
+        currentFileTruncated ||= untracked.truncated;
       }
     }
     const redacted = redactCredentials(patch);
@@ -871,7 +1068,7 @@ export class CliReviewProvider implements IReviewProvider {
       diffStat,
       patch: bounded.value,
       truncation: {
-        truncated: bounded.truncated,
+        truncated: bounded.truncated || currentFileTruncated,
         maxBytes: input.maxPatchBytes,
         originalBytes: bounded.originalBytes,
         returnedBytes: bounded.returnedBytes,
@@ -927,6 +1124,8 @@ export class CliReviewProvider implements IReviewProvider {
       );
     }
     const byteBounded = truncateUtf8(buffer.toString('utf8'), byteLimit);
+    const sourceByteTruncated =
+      originalBytes > buffer.length || byteBounded.truncated;
     const allLines = byteBounded.value.split('\n');
     const returnedLines = allLines.slice(0, lineLimit);
     const lineTruncated = allLines.length > lineLimit;
@@ -937,12 +1136,12 @@ export class CliReviewProvider implements IReviewProvider {
       redacted: redacted.count > 0,
       redactionCount: redacted.count,
       truncation: {
-        truncated: byteBounded.truncated || lineTruncated,
+        truncated: sourceByteTruncated || lineTruncated,
         byteLimit,
         lineLimit,
         originalBytes,
         returnedBytes: Buffer.byteLength(redacted.content),
-        ...(!byteBounded.truncated ? { originalLines: allLines.length } : {}),
+        ...(!sourceByteTruncated ? { originalLines: allLines.length } : {}),
         returnedLines: returnedLines.length,
       },
     };
@@ -976,43 +1175,15 @@ export class CliReviewProvider implements IReviewProvider {
         { path: safePath },
       );
     }
-    const absolute = path.resolve(repository.root, safePath);
-    const fileStat = await lstat(absolute).catch(() => {
-      throw new McpError(
-        JsonRpcErrorCode.NotFound,
-        'Changed file is not present in the working tree.',
-        { path: safePath },
-      );
-    });
-    if (fileStat.isSymbolicLink()) {
-      throw new McpError(
-        JsonRpcErrorCode.Forbidden,
-        'Symbolic-link file reads are not permitted.',
-        { path: safePath },
-      );
-    }
-    if (!fileStat.isFile()) {
-      throw new McpError(
-        JsonRpcErrorCode.ValidationError,
-        'Changed path is not a regular file.',
-        { path: safePath },
-      );
-    }
-    const resolved = await realpath(absolute);
-    if (!isInside(repository.root, resolved)) {
-      throw new McpError(
-        JsonRpcErrorCode.Forbidden,
-        'Changed file resolves outside the repository.',
-        { path: safePath },
-      );
-    }
-    const handle = await open(resolved, 'r');
-    const buffer = Buffer.alloc(Math.min(fileStat.size, input.byteLimit) + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    await handle.close();
+    const current = await readSafeCurrentTextFile(
+      repository.root,
+      safePath,
+      input.byteLimit,
+      this.#currentFileIo,
+    );
     const output = this.#readBoundedText(
-      buffer.subarray(0, bytesRead),
-      fileStat.size,
+      current.buffer,
+      current.originalBytes,
       input.byteLimit,
       input.lineLimit,
     );
